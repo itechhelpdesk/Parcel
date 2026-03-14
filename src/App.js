@@ -1,5 +1,5 @@
 /* global BarcodeDetector */
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const LAYOUTS = [
@@ -24,128 +24,20 @@ async function loadJsPDF() {
   return window.jspdf.jsPDF;
 }
 
-// ─── Draw image sheet — no crop ──────────────────────────────────────────────
+// ─── Draw sheet — no crop, preserves aspect ratio ───────────────────────────
 function drawSheet(canvas, img, cols, rows) {
   const CELL_W = Math.max(img.width, 600);
   const CELL_H = Math.round(CELL_W * (img.height / img.width));
   const GAP    = Math.round(CELL_W * 0.015);
   const PAD    = Math.round(CELL_W * 0.025);
-  const W = PAD * 2 + cols * CELL_W + (cols - 1) * GAP;
-  const H = PAD * 2 + rows * CELL_H + (rows - 1) * GAP;
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
-  for (let r = 0; r < rows; r++)
-    for (let c = 0; c < cols; c++)
-      ctx.drawImage(img, PAD + c*(CELL_W+GAP), PAD + r*(CELL_H+GAP), CELL_W, CELL_H);
-}
-
-// ─── Draw QR-scanned waybill card onto canvas ────────────────────────────────
-function drawWaybillCard(canvas, waybill, cols, rows) {
-  // Each cell is 800x1100 (portrait, like A5 waybill)
-  const CELL_W = 800, CELL_H = 1100;
-  const GAP = Math.round(CELL_W * 0.015);
-  const PAD = Math.round(CELL_W * 0.025);
   const W = PAD*2 + cols*CELL_W + (cols-1)*GAP;
   const H = PAD*2 + rows*CELL_H + (rows-1)*GAP;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const ox = PAD + c*(CELL_W+GAP);
-      const oy = PAD + r*(CELL_H+GAP);
-      drawSingleCard(ctx, ox, oy, CELL_W, CELL_H, waybill);
-    }
-  }
-}
-
-function drawSingleCard(ctx, ox, oy, W, H, wb) {
-  // Border
-  ctx.strokeStyle = '#222'; ctx.lineWidth = 3;
-  ctx.strokeRect(ox+2, oy+2, W-4, H-4);
-
-  // Header bar
-  ctx.fillStyle = '#111';
-  ctx.fillRect(ox+2, oy+2, W-4, 90);
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 42px Arial';
-  ctx.textAlign = 'center';
-  ctx.fillText('WAYBILL', ox + W/2, oy + 58);
-
-  // Tracking number
-  ctx.fillStyle = '#111';
-  ctx.font = 'bold 52px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(wb.tracking || wb.raw, ox + W/2, oy + 180);
-
-  // Divider
-  ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(ox+20, oy+200); ctx.lineTo(ox+W-20, oy+200); ctx.stroke();
-
-  // Details
-  const lines = wb.lines || [];
-  ctx.font = '28px Arial'; ctx.fillStyle = '#333'; ctx.textAlign = 'left';
-  let y = oy + 250;
-  lines.forEach(line => {
-    if (line.label) {
-      ctx.font = 'bold 22px Arial'; ctx.fillStyle = '#888';
-      ctx.fillText(line.label.toUpperCase(), ox+40, y);
-      y += 30;
-    }
-    ctx.font = '28px Arial'; ctx.fillStyle = '#111';
-    // Word wrap
-    const words = (line.value || '').split(' ');
-    let cur = '';
-    words.forEach(w => {
-      const test = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(test).width > W - 80) {
-        ctx.fillText(cur, ox+40, y); y += 36; cur = w;
-      } else { cur = test; }
-    });
-    if (cur) { ctx.fillText(cur, ox+40, y); y += 46; }
-  });
-
-  // Raw QR data at bottom
-  ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(ox+20, oy+H-100); ctx.lineTo(ox+W-20, oy+H-100); ctx.stroke();
-  ctx.font = '20px monospace'; ctx.fillStyle = '#aaa'; ctx.textAlign = 'center';
-  const raw = (wb.raw || '').substring(0, 80);
-  ctx.fillText(raw, ox+W/2, oy+H-60);
-}
-
-// ─── Parse QR raw value into structured waybill ──────────────────────────────
-function parseQR(raw) {
-  const r = raw.trim();
-  // Try JSON
-  try {
-    const obj = JSON.parse(r);
-    const lines = Object.entries(obj).map(([k, v]) => ({ label: k, value: String(v) }));
-    return { raw: r, tracking: obj.tracking_number || obj.trackingNumber || obj.id || r, lines };
-  } catch {}
-
-  // Try key:value lines (e.g. "Order ID: 123\nBuyer: John")
-  if (r.includes('\n') || r.includes('|')) {
-    const parts = r.split(/[\n|]+/).map(s => s.trim()).filter(Boolean);
-    const lines = parts.map(p => {
-      const idx = p.indexOf(':');
-      if (idx > 0) return { label: p.substring(0, idx).trim(), value: p.substring(idx+1).trim() };
-      return { label: '', value: p };
-    });
-    const tracking = parts[0];
-    return { raw: r, tracking, lines };
-  }
-
-  // Plain text — likely just tracking number
-  return {
-    raw: r,
-    tracking: r,
-    lines: [
-      { label: 'Tracking Number', value: r },
-      { label: 'Scanned', value: new Date().toLocaleString() },
-    ],
-  };
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++)
+      ctx.drawImage(img, PAD+c*(CELL_W+GAP), PAD+r*(CELL_H+GAP), CELL_W, CELL_H);
 }
 
 function renderToDataUrl(img, cols, rows) {
@@ -154,45 +46,18 @@ function renderToDataUrl(img, cols, rows) {
   return c.toDataURL('image/png', 1.0);
 }
 
-function renderWaybillToDataUrl(waybill, cols, rows) {
-  const c = document.createElement('canvas');
-  drawWaybillCard(c, waybill, cols, rows);
-  return c.toDataURL('image/png', 1.0);
-}
-
 function thumbUrl(img) {
   const c = document.createElement('canvas');
-  c.width = 72; c.height = 72;
+  c.width = 64; c.height = 80;
   const cx = c.getContext('2d');
-  const s = Math.min(72/img.width, 72/img.height);
+  cx.fillStyle = '#fff'; cx.fillRect(0,0,64,80);
+  const s = Math.min(64/img.width, 80/img.height);
   const tw = img.width*s, th = img.height*s;
-  cx.fillStyle = '#fff'; cx.fillRect(0,0,72,72);
-  cx.drawImage(img, (72-tw)/2, (72-th)/2, tw, th);
+  cx.drawImage(img, (64-tw)/2, (80-th)/2, tw, th);
   return c.toDataURL();
 }
 
-function waybillThumbUrl(wb) {
-  const c = document.createElement('canvas');
-  c.width = 72; c.height = 100;
-  const cx = c.getContext('2d');
-  cx.fillStyle = '#fff'; cx.fillRect(0,0,72,100);
-  cx.fillStyle = '#111'; cx.fillRect(0,0,72,22);
-  cx.fillStyle = '#fff'; cx.font = 'bold 10px Arial'; cx.textAlign = 'center';
-  cx.fillText('WAYBILL', 36, 15);
-  cx.fillStyle = '#111'; cx.font = 'bold 9px monospace'; cx.textAlign = 'center';
-  const t = (wb.tracking || wb.raw || '').substring(0,14);
-  cx.fillText(t, 36, 40);
-  cx.font = '7px Arial'; cx.fillStyle = '#555';
-  (wb.lines || []).slice(0,4).forEach((l, i) => {
-    cx.fillText((l.value||'').substring(0,12), 36, 60+i*10);
-  });
-  cx.strokeStyle='#ccc'; cx.lineWidth=1; cx.strokeRect(1,1,70,98);
-  return c.toDataURL();
-}
-
-// ─── Queue item — can be image or waybill (from QR) ──────────────────────────
-// { type: 'image', img } or { type: 'waybill', waybill }
-
+// ─── Theme ──────────────────────────────────────────────────────────────────
 const THEME = {
   light: {
     bg:'#f5f4f0', surface:'#ffffff', border:'#e2dfd8',
@@ -207,7 +72,7 @@ const THEME = {
     shadow:'0 2px 16px rgba(0,0,0,0.08)',
     toggleBg:'#e2dfd8', toggleKnob:'#fff', toggleIcon:'🌙',
     uploadHoverBg:'#fff6f8', deleteBg:'rgba(254,44,85,0.08)',
-    qrCardBg:'#f0fdf8', qrCardBorder:'#0ea5a0',
+    scanActiveBg:'rgba(14,165,160,0.08)', scanActiveBorder:'#0ea5a0',
   },
   dark: {
     bg:'#0d0d0d', surface:'#161616', border:'#2a2a2a',
@@ -222,16 +87,17 @@ const THEME = {
     shadow:'0 2px 20px rgba(0,0,0,0.4)',
     toggleBg:'#2a2a2a', toggleKnob:'#fe2c55', toggleIcon:'☀️',
     uploadHoverBg:'#1a0a0e', deleteBg:'rgba(254,44,85,0.12)',
-    qrCardBg:'#0a1f1a', qrCardBorder:'#25f4ee55',
+    scanActiveBg:'rgba(37,244,238,0.06)', scanActiveBorder:'#25f4ee44',
   },
 };
 
+// ─── App ────────────────────────────────────────────────────────────────────
 export default function App() {
   const [dark, setDark]               = useState(false);
   const T = dark ? THEME.dark : THEME.light;
 
   const [tab, setTab]                 = useState('upload');
-  const [queue, setQueue]             = useState([]); // { type, img?, waybill? }
+  const [queue, setQueue]             = useState([]);   // Image objects
   const [selIdx, setSelIdx]           = useState(0);
   const [layout, setLayout]           = useState(LAYOUTS[2]);
   const [sizeMm, setSizeMm]           = useState(100);
@@ -240,20 +106,18 @@ export default function App() {
   const [uploadHover, setUploadHover] = useState(false);
   const [toast, setToast]             = useState('');
   const [toastShow, setToastShow]     = useState(false);
-  const [lastScanned, setLastScanned] = useState(null); // show scanned card preview
+  const [scanStatus, setScanStatus]   = useState(''); // live scan feedback
+  const [loadingUrl, setLoadingUrl]   = useState(''); // currently fetching
 
-  const canvasRef = useRef(null);
-  const videoRef  = useRef(null);
-  const streamRef = useRef(null);
-  const scanRef   = useRef(null);
+  const canvasRef  = useRef(null);
+  const videoRef   = useRef(null);
+  const streamRef  = useRef(null);
+  const scanRef    = useRef(null);
+  const scannedSet = useRef(new Set()); // dedupe QRs in one session
 
-  // Redraw preview canvas
   useEffect(() => {
     if (!queue.length || !canvasRef.current) return;
-    const item = queue[selIdx];
-    if (!item) return;
-    if (item.type === 'image') drawSheet(canvasRef.current, item.img, layout.cols, layout.rows);
-    else drawWaybillCard(canvasRef.current, item.waybill, layout.cols, layout.rows);
+    drawSheet(canvasRef.current, queue[selIdx], layout.cols, layout.rows);
   }, [queue, selIdx, layout, tab]);
 
   useEffect(() => () => stopScan(), []); // eslint-disable-line
@@ -263,21 +127,108 @@ export default function App() {
     setTimeout(() => setToastShow(false), 2800);
   }
 
-  function addItems(items) {
+  // ── Add image to queue ──
+  function addImg(img) {
     setQueue(prev => {
-      const next = [...prev, ...items];
+      const next = [...prev, img];
       setSelIdx(next.length - 1);
       return next;
     });
-    setTab('layout');
   }
 
-  function removeItem(i) {
-    setQueue(prev => {
-      const next = prev.filter((_, idx) => idx !== i);
-      setSelIdx(Math.min(i, Math.max(0, next.length - 1)));
-      return next;
-    });
+  // ── Load image from URL (from QR) ──
+  function loadFromUrl(url) {
+    if (scannedSet.current.has(url)) return; // already scanned this one
+    scannedSet.current.add(url);
+    setLoadingUrl(url);
+    setScanStatus(`⬇ Loading waybill…`);
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      addImg(img);
+      setLoadingUrl('');
+      setScanStatus(`✓ Waybill loaded! Keep scanning for more…`);
+      ping(`✓ Waybill #${scannedSet.current.size} added`);
+    };
+    img.onerror = () => {
+      // crossOrigin failed — try without it (works for some CDNs)
+      const img2 = new Image();
+      img2.onload = () => {
+        addImg(img2);
+        setLoadingUrl('');
+        setScanStatus(`✓ Waybill loaded! Keep scanning for more…`);
+        ping(`✓ Waybill #${scannedSet.current.size} added`);
+      };
+      img2.onerror = () => {
+        setLoadingUrl('');
+        setScanStatus(`⚠ Could not load image — is it a direct image URL?`);
+        scannedSet.current.delete(url); // allow retry
+      };
+      img2.src = url;
+    };
+    img.src = url;
+  }
+
+  // ── Camera scan — stays ON, continuous ──
+  async function startScan() {
+    scannedSet.current = new Set();
+    setScanStatus('📷 Camera ready — point at QR code');
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      streamRef.current = s;
+      videoRef.current.srcObject = s;
+      setScanning(true);
+      // Scan every 500ms
+      scanRef.current = setInterval(tryDecode, 500);
+    } catch {
+      ping('Camera permission denied');
+      setScanStatus('');
+    }
+  }
+
+  function stopScan() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    clearInterval(scanRef.current);
+    setScanning(false);
+    setScanStatus('');
+  }
+
+  function tryDecode() {
+    const video = videoRef.current;
+    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = video.videoWidth; tmp.height = video.videoHeight;
+    tmp.getContext('2d').drawImage(video, 0, 0);
+
+    if (typeof BarcodeDetector !== 'undefined') {
+      // Try both QR and all other 2D codes
+      new BarcodeDetector({ formats: ['qr_code', 'data_matrix', 'aztec'] })
+        .detect(tmp)
+        .then(codes => {
+          codes.forEach(code => {
+            const raw = code.rawValue?.trim();
+            if (!raw) return;
+            // Check if it's a URL
+            if (raw.startsWith('http://') || raw.startsWith('https://')) {
+              loadFromUrl(raw);
+            } else {
+              // Not a URL — show the raw text as status
+              if (!scannedSet.current.has(raw)) {
+                scannedSet.current.add(raw);
+                setScanStatus(`📄 QR contains text: ${raw.substring(0, 60)}`);
+                ping(`Scanned: ${raw.substring(0, 40)}`);
+              }
+            }
+          });
+        })
+        .catch(() => {});
+    } else {
+      setScanStatus('⚠ BarcodeDetector not supported — use Chrome/Edge on Android');
+    }
   }
 
   // ── File upload ──
@@ -289,10 +240,11 @@ export default function App() {
       reader.onload = e => {
         const img = new Image();
         img.onload = () => {
-          loaded.push({ type: 'image', img });
+          loaded.push(img);
           if (loaded.length === total) {
-            addItems(loaded);
-            ping(`✓ ${total} image${total>1?'s':''} added`);
+            loaded.forEach(i => addImg(i));
+            setTab('layout');
+            ping(`✓ ${total} waybill${total>1?'s':''} added`);
           }
         };
         img.src = e.target.result;
@@ -306,86 +258,22 @@ export default function App() {
     if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   }
 
-  // ── QR Scan ──
-  async function startScan() {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      streamRef.current = s;
-      videoRef.current.srcObject = s;
-      setScanning(true);
-      scanRef.current = setInterval(tryDecode, 700);
-    } catch { ping('Camera permission denied'); }
-  }
-
-  function stopScan() {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    clearInterval(scanRef.current);
-    setScanning(false);
-  }
-
-  const lastRaw = useRef('');
-  function tryDecode() {
-    const video = videoRef.current;
-    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-    const tmp = document.createElement('canvas');
-    tmp.width = video.videoWidth; tmp.height = video.videoHeight;
-    tmp.getContext('2d').drawImage(video, 0, 0);
-    if (typeof BarcodeDetector !== 'undefined') {
-      new BarcodeDetector({ formats: ['qr_code'] })
-        .detect(tmp)
-        .then(codes => {
-          if (!codes.length) return;
-          const raw = codes[0].rawValue;
-          if (raw === lastRaw.current) return; // debounce same QR
-          lastRaw.current = raw;
-          const waybill = parseQR(raw);
-          setLastScanned(waybill);
-          ping(`✓ Scanned: ${waybill.tracking.substring(0, 20)}`);
-        })
-        .catch(() => {});
-    }
-  }
-
-  function confirmScanned() {
-    if (!lastScanned) return;
-    addItems([{ type: 'waybill', waybill: lastScanned }]);
-    setLastScanned(null);
-    lastRaw.current = '';
-    ping('Added to print queue!');
-  }
-
-  function discardScanned() {
-    setLastScanned(null);
-    lastRaw.current = '';
-  }
-
-  // ── Get dataUrl for a queue item ──
-  function getDataUrl(item) {
-    if (item.type === 'image') return renderToDataUrl(item.img, layout.cols, layout.rows);
-    return renderWaybillToDataUrl(item.waybill, layout.cols, layout.rows);
-  }
-
-  function getItemSize(item) {
-    const labelW = sizeMm;
-    let labelH;
-    if (item.type === 'image') {
-      labelH = Math.round(sizeMm * (item.img.height / item.img.width));
-    } else {
-      // waybill card is 800x1100 ratio
-      labelH = Math.round(sizeMm * (1100 / 800));
-    }
-    return { labelW, labelH };
+  function removeItem(i) {
+    setQueue(prev => {
+      const next = prev.filter((_, idx) => idx !== i);
+      setSelIdx(Math.min(i, Math.max(0, next.length-1)));
+      return next;
+    });
   }
 
   // ── Print ALL ──
   function doPrint() {
     if (!queue.length) return;
     const { cols, rows } = layout;
-
-    const allPages = queue.flatMap(item => {
-      const dataUrl = getDataUrl(item);
-      const { labelW, labelH } = getItemSize(item);
+    const allPages = queue.flatMap(img => {
+      const dataUrl  = renderToDataUrl(img, cols, rows);
+      const labelW   = sizeMm;
+      const labelH   = Math.round(sizeMm * (img.height / img.width));
       const pw = PRINT_PAD*2 + cols*labelW + (cols-1)*PRINT_GAP;
       const ph = PRINT_PAD*2 + rows*labelH + (rows-1)*PRINT_GAP;
       const cells = Array(cols*rows).fill(null)
@@ -408,20 +296,21 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
 <script>window.onload=function(){window.print();setTimeout(function(){window.close();},1000);}<\/script>
 </body></html>`);
     win.document.close();
-    ping(`🖨️ Printing ${queue.length} item${queue.length>1?'s':''} × ${cols*rows} per sheet × ${copies} cop${copies>1?'ies':'y'}`);
+    ping(`🖨️ Printing ${queue.length} waybill${queue.length>1?'s':''} × ${cols*rows} tiles × ${copies} cop${copies>1?'ies':'y'}`);
   }
 
   // ── PDF ALL ──
   async function doPDF() {
     if (!queue.length) return;
-    ping(`📄 Building PDF for ${queue.length} item${queue.length>1?'s':''}…`);
+    ping(`📄 Building PDF…`);
     try {
       const JsPDF = await loadJsPDF();
       const { cols, rows } = layout;
       let doc = null;
-      for (const item of queue) {
-        const dataUrl = getDataUrl(item);
-        const { labelW, labelH } = getItemSize(item);
+      for (const img of queue) {
+        const dataUrl = renderToDataUrl(img, cols, rows);
+        const labelW  = sizeMm;
+        const labelH  = Math.round(sizeMm * (img.height / img.width));
         const pw = PRINT_PAD*2 + cols*labelW + (cols-1)*PRINT_GAP;
         const ph = PRINT_PAD*2 + rows*labelH + (rows-1)*PRINT_GAP;
         for (let copy = 0; copy < copies; copy++) {
@@ -437,7 +326,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
       }
       doc.save('waybills.pdf');
       const total = queue.length * copies;
-      ping(`✓ waybills.pdf — ${total} page${total>1?'s':''}, ${cols*rows} labels each`);
+      ping(`✓ waybills.pdf — ${total} page${total>1?'s':''}`);
     } catch(e) { ping('PDF error: '+e.message); }
   }
 
@@ -454,7 +343,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
           <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:28 }}>
             <div>
               <div style={{ fontFamily:"'Syne',sans-serif", fontSize:28, fontWeight:800, letterSpacing:-1, background:'linear-gradient(135deg,#fe2c55,#ff8f3f)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>StickerBooth</div>
-              <div style={{ fontSize:12, color:T.textMuted, marginTop:3 }}>upload or scan QR → tile → bulk print / PDF</div>
+              <div style={{ fontSize:12, color:T.textMuted, marginTop:3 }}>scan QR or upload → tile → bulk print / PDF</div>
             </div>
             <button onClick={() => setDark(d=>!d)} title="Toggle theme"
               style={{ width:46, height:26, borderRadius:13, background:T.toggleBg, border:'none', cursor:'pointer', position:'relative', flexShrink:0, marginTop:4, transition:'background 0.3s' }}>
@@ -466,10 +355,11 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
 
           {/* Tabs */}
           <div style={{ display:'flex', gap:6, background:T.surface, padding:6, borderRadius:16, marginBottom:22, boxShadow:T.shadow }}>
-            {[['upload','📁 Upload'],['scan','📷 QR Scan'],['layout','🖨️ Print']].map(([id,label]) => (
+            {[['upload','📁 Upload'],['scan','📷 Scan QR'],['layout','🖨️ Print']].map(([id,label]) => (
               <button key={id} onClick={() => { setTab(id); if(id!=='scan') stopScan(); }}
                 style={{ ...base, flex:1, padding:'10px 6px', borderRadius:10, fontSize:13, fontWeight:500, background:tab===id?T.tabActiveBg:'transparent', color:tab===id?T.tabActiveTxt:T.textMuted }}>
                 {label}
+                {id==='scan' && scanning && <span style={{ display:'inline-block', width:6, height:6, borderRadius:'50%', background:'#fe2c55', marginLeft:5, verticalAlign:'middle' }} />}
               </button>
             ))}
           </div>
@@ -486,31 +376,25 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
               >
                 <input type="file" accept="image/*" multiple style={{ position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%' }} onChange={e => handleFiles(e.target.files)} />
                 <span style={{ fontSize:40, display:'block', marginBottom:12 }}>🖼️</span>
-                <p style={{ fontSize:14, color:T.textMuted }}><span style={{ color:T.accent, fontWeight:600 }}>Tap to upload</span> or drag images here</p>
-                <p style={{ fontSize:12, color:T.textFaint, marginTop:6 }}>Multiple waybills OK — each gets its own page</p>
+                <p style={{ fontSize:14, color:T.textMuted }}><span style={{ color:T.accent, fontWeight:600 }}>Tap to upload</span> or drag waybill images here</p>
+                <p style={{ fontSize:12, color:T.textFaint, marginTop:6 }}>Multiple waybills OK — each on its own page</p>
               </label>
 
               {hasItems && (
                 <div style={{ marginTop:14 }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-                    <span style={{ fontSize:12, color:T.textMuted, fontWeight:500 }}>{queue.length} item{queue.length>1?'s':''} queued</span>
+                    <span style={{ fontSize:12, color:T.textMuted, fontWeight:500 }}>{queue.length} waybill{queue.length>1?'s':''} queued</span>
                     <button onClick={() => { setQueue([]); setSelIdx(0); ping('Cleared!'); }}
                       style={{ ...base, fontSize:11, color:T.accent, background:T.deleteBg, padding:'4px 10px', borderRadius:8, border:`1px solid ${T.accent}44` }}>Clear all</button>
                   </div>
                   <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
-                    {queue.map((item, i) => (
+                    {queue.map((img, i) => (
                       <div key={i} style={{ position:'relative', flexShrink:0 }}>
-                        <img
-                          src={item.type==='image' ? thumbUrl(item.img) : waybillThumbUrl(item.waybill)}
-                          alt=""
-                          onClick={() => { setSelIdx(i); setTab('layout'); }}
-                          style={{ width:64, height:80, objectFit:'contain', background:'#fff', borderRadius:10, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }}
-                        />
+                        <img src={thumbUrl(img)} alt="" onClick={() => { setSelIdx(i); setTab('layout'); }}
+                          style={{ width:64, height:80, objectFit:'contain', background:'#fff', borderRadius:10, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }} />
                         <button onClick={() => removeItem(i)}
                           style={{ ...base, position:'absolute', top:-6, right:-6, width:20, height:20, borderRadius:'50%', background:T.accent, color:'#fff', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
-                        <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:3 }}>
-                          {item.type==='waybill'?'QR':'IMG'} #{i+1}
-                        </div>
+                        <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:3 }}>#{i+1}</div>
                       </div>
                     ))}
                   </div>
@@ -519,84 +403,82 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
             </div>
           )}
 
-          {/* ══ QR Scan ══ */}
+          {/* ══ Scan QR ══ */}
           {tab === 'scan' && (
             <div>
-              <span style={{ display:'inline-block', background:`${T.cyan}18`, color:T.cyan, fontSize:11, padding:'3px 12px', borderRadius:100, marginBottom:12 }}>
-                I-scan ang QR code ng waybill — lalabas agad ang details
-              </span>
-
-              <div style={{ position:'relative', background:'#000', borderRadius:18, overflow:'hidden', aspectRatio:'4/3' }}>
-                <video ref={videoRef} autoPlay muted playsInline style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
-                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-                  <div style={{ width:200, height:200, border:`3px solid ${T.cyan}`, borderRadius:12, boxShadow:'0 0 0 9999px rgba(0,0,0,0.55)' }} />
-                </div>
+              {/* Instructions */}
+              <div style={{ background:T.scanActiveBg, border:`1px solid ${T.scanActiveBorder}`, borderRadius:12, padding:'10px 14px', marginBottom:14, fontSize:12, color:T.cyan, lineHeight:1.7 }}>
+                📌 I-scan yung QR code ng SPX / Shopee / Lazada waybill mo<br />
+                🔄 Camera nananatili ON — pwede ka mag-scan ng marami nang sunod-sunod<br />
+                ✅ Bawat scan auto-aadd sa print queue
               </div>
 
-              <button onClick={() => scanning ? stopScan() : startScan()}
-                style={{ ...base, width:'100%', padding:14, borderRadius:12, marginTop:12, fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, background:scanning?T.accent:T.cyan, color:'#fff' }}>
-                {scanning ? '⏹ Stop Camera' : '▶ Start Scanning'}
-              </button>
-
-              {/* Scanned result card */}
-              {lastScanned && (
-                <div style={{ marginTop:16, background:T.qrCardBg, border:`2px solid ${T.qrCardBorder}`, borderRadius:16, padding:16 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
-                    <span style={{ fontSize:20 }}>✅</span>
-                    <span style={{ fontSize:13, fontWeight:600, color:T.cyan }}>QR Scanned Successfully!</span>
+              {/* Video */}
+              <div style={{ position:'relative', background:'#000', borderRadius:18, overflow:'hidden', aspectRatio:'4/3' }}>
+                <video ref={videoRef} autoPlay muted playsInline style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
+                {/* Viewfinder */}
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+                  <div style={{ position:'relative', width:200, height:200 }}>
+                    <div style={{ position:'absolute', inset:0, boxShadow:'0 0 0 9999px rgba(0,0,0,0.5)' }} />
+                    {/* Corner markers */}
+                    {[
+                      { top:0, left:0, borderTop:`3px solid ${T.cyan}`, borderLeft:`3px solid ${T.cyan}` },
+                      { top:0, right:0, borderTop:`3px solid ${T.cyan}`, borderRight:`3px solid ${T.cyan}` },
+                      { bottom:0, left:0, borderBottom:`3px solid ${T.cyan}`, borderLeft:`3px solid ${T.cyan}` },
+                      { bottom:0, right:0, borderBottom:`3px solid ${T.cyan}`, borderRight:`3px solid ${T.cyan}` },
+                    ].map((s, i) => (
+                      <div key={i} style={{ position:'absolute', width:24, height:24, ...s }} />
+                    ))}
+                    {scanning && <div style={{ position:'absolute', inset:0, border:`1px solid ${T.cyan}44`, animation:'none' }} />}
                   </div>
-
-                  {/* Tracking number big */}
-                  <div style={{ background:T.surface, borderRadius:10, padding:'10px 14px', marginBottom:10, border:`1px solid ${T.border}` }}>
-                    <div style={{ fontSize:10, color:T.textMuted, textTransform:'uppercase', letterSpacing:'1px', marginBottom:4 }}>Tracking Number</div>
-                    <div style={{ fontFamily:'monospace', fontSize:18, fontWeight:700, color:T.text, letterSpacing:1 }}>{lastScanned.tracking}</div>
-                  </div>
-
-                  {/* All parsed lines */}
-                  {lastScanned.lines && lastScanned.lines.length > 0 && (
-                    <div style={{ background:T.surface, borderRadius:10, padding:'10px 14px', marginBottom:12, border:`1px solid ${T.border}`, maxHeight:160, overflowY:'auto' }}>
-                      {lastScanned.lines.map((line, i) => (
-                        <div key={i} style={{ marginBottom:6 }}>
-                          {line.label && <div style={{ fontSize:10, color:T.textMuted, textTransform:'uppercase', letterSpacing:'0.8px' }}>{line.label}</div>}
-                          <div style={{ fontSize:13, color:T.text }}>{line.value}</div>
-                        </div>
-                      ))}
+                </div>
+                {/* Loading overlay */}
+                {loadingUrl && (
+                  <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <div style={{ color:'#fff', fontSize:14, textAlign:'center', padding:20 }}>
+                      <div style={{ fontSize:28, marginBottom:8 }}>⬇️</div>
+                      Loading waybill image…
                     </div>
-                  )}
-
-                  {/* Raw QR data */}
-                  <div style={{ fontSize:10, color:T.textFaint, fontFamily:'monospace', wordBreak:'break-all', marginBottom:12 }}>
-                    {lastScanned.raw.substring(0, 120)}{lastScanned.raw.length > 120 ? '…' : ''}
                   </div>
+                )}
+              </div>
 
-                  <div style={{ display:'flex', gap:8 }}>
-                    <button onClick={discardScanned}
-                      style={{ ...base, flex:1, padding:'11px 10px', border:`2px solid ${T.border}`, borderRadius:10, background:'transparent', color:T.textMuted, fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:700 }}>
-                      Discard
-                    </button>
-                    <button onClick={confirmScanned}
-                      style={{ ...base, flex:2, padding:'11px 10px', border:'none', borderRadius:10, background:T.btnPrintBg, color:'#fff', fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:800 }}>
-                      ✓ Add to Print Queue
-                    </button>
-                  </div>
+              {/* Status bar */}
+              {scanStatus && (
+                <div style={{ marginTop:10, padding:'10px 14px', background:T.surface, borderRadius:10, border:`1px solid ${T.border}`, fontSize:12, color:T.textMuted }}>
+                  {scanStatus}
                 </div>
               )}
 
-              {!lastScanned && (
-                <p style={{ fontSize:12, color:T.textFaint, textAlign:'center', marginTop:10 }}>
-                  I-point ang camera sa QR code ng waybill · lalabas agad ang details
-                </p>
+              {/* Start/Stop button */}
+              <button onClick={() => scanning ? stopScan() : startScan()}
+                style={{ ...base, width:'100%', padding:14, borderRadius:12, marginTop:10, fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, background:scanning?T.accent:T.cyan, color:'#fff' }}>
+                {scanning ? '⏹ Stop Scanning' : '▶ Start Scanning'}
+              </button>
+
+              {/* Queue status */}
+              {hasItems && (
+                <div style={{ marginTop:12, padding:'10px 14px', background:T.btnPdfBg, border:`1px solid ${T.btnPdfBorder}`, borderRadius:12, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                  <span style={{ fontSize:13, color:T.btnPdfColor, fontWeight:600 }}>
+                    📦 {queue.length} waybill{queue.length>1?'s':''} ready
+                  </span>
+                  <button onClick={() => { stopScan(); setTab('layout'); }}
+                    style={{ ...base, fontSize:12, fontWeight:700, color:'#fff', background:T.btnPrintBg, padding:'7px 14px', borderRadius:8, fontFamily:"'Syne',sans-serif" }}>
+                    Print All →
+                  </button>
+                </div>
               )}
 
+              {/* Scanned thumbnails */}
               {hasItems && (
-                <div style={{ marginTop:14, padding:'10px 14px', background:T.btnPdfBg, border:`1px solid ${T.btnPdfBorder}`, borderRadius:12 }}>
-                  <span style={{ fontSize:12, color:T.btnPdfColor, fontWeight:600 }}>
-                    📦 {queue.length} item{queue.length>1?'s':''} in queue
-                  </span>
-                  <button onClick={() => setTab('layout')}
-                    style={{ ...base, marginLeft:12, fontSize:11, color:T.btnPdfColor, textDecoration:'underline', background:'transparent' }}>
-                    Go to Print →
-                  </button>
+                <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:4, marginTop:10 }}>
+                  {queue.map((img, i) => (
+                    <div key={i} style={{ flexShrink:0, textAlign:'center' }}>
+                      <img src={thumbUrl(img)} alt=""
+                        style={{ width:48, height:60, objectFit:'contain', background:'#fff', borderRadius:8, display:'block', border:`2px solid ${T.border}` }} />
+                      <div style={{ fontSize:9, color:T.textMuted, marginTop:2 }}>#{i+1}</div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -609,7 +491,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
                 <div style={{ background:T.btnPdfBg, border:`1px solid ${T.btnPdfBorder}`, borderRadius:12, padding:'10px 14px', marginBottom:16, display:'flex', alignItems:'center', gap:10 }}>
                   <span style={{ fontSize:18 }}>📦</span>
                   <div>
-                    <div style={{ fontSize:13, fontWeight:600, color:T.btnPdfColor }}>{queue.length} items in queue</div>
+                    <div style={{ fontSize:13, fontWeight:600, color:T.btnPdfColor }}>{queue.length} waybills in queue</div>
                     <div style={{ fontSize:11, color:T.textMuted }}>PDF & Print includes ALL — each on its own page</div>
                   </div>
                 </div>
@@ -617,17 +499,11 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
 
               {queue.length > 1 && (
                 <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:4, marginBottom:14 }}>
-                  {queue.map((item, i) => (
+                  {queue.map((img, i) => (
                     <div key={i} style={{ flexShrink:0 }}>
-                      <img
-                        src={item.type==='image' ? thumbUrl(item.img) : waybillThumbUrl(item.waybill)}
-                        alt=""
-                        onClick={() => setSelIdx(i)}
-                        style={{ width:48, height:60, objectFit:'contain', background:'#fff', borderRadius:8, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }}
-                      />
-                      <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:2 }}>
-                        {item.type==='waybill'?'QR':'IMG'}#{i+1}
-                      </div>
+                      <img src={thumbUrl(img)} alt="" onClick={() => setSelIdx(i)}
+                        style={{ width:48, height:60, objectFit:'contain', background:'#fff', borderRadius:8, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }} />
+                      <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:2 }}>#{i+1}</div>
                     </div>
                   ))}
                 </div>
@@ -663,7 +539,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
               </div>
 
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-                <p style={{ fontSize:11, fontWeight:600, color:T.textMuted, textTransform:'uppercase', letterSpacing:'1.2px', margin:0 }}>Copies per item</p>
+                <p style={{ fontSize:11, fontWeight:600, color:T.textMuted, textTransform:'uppercase', letterSpacing:'1.2px', margin:0 }}>Copies per waybill</p>
                 <div style={{ display:'flex', alignItems:'center', gap:14 }}>
                   <button onClick={() => setCopies(c=>Math.max(1,c-1))} style={{ ...base, width:34, height:34, borderRadius:'50%', border:`2px solid ${T.border}`, background:'transparent', color:T.text, fontSize:20, display:'flex', alignItems:'center', justifyContent:'center' }}>−</button>
                   <span style={{ fontFamily:"'Syne',sans-serif", fontSize:24, fontWeight:800, color:T.text, minWidth:30, textAlign:'center' }}>{copies}</span>
@@ -672,8 +548,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
               </div>
 
               <p style={{ fontSize:11, fontWeight:600, color:T.textMuted, textTransform:'uppercase', letterSpacing:'1.2px', marginBottom:10 }}>
-                Preview — item #{selIdx+1} of {queue.length}
-                {queue[selIdx]?.type==='waybill' && <span style={{ color:T.cyan, marginLeft:8, textTransform:'none', letterSpacing:0 }}>📷 QR Scanned</span>}
+                Preview — #{selIdx+1} of {queue.length}
               </p>
               <div style={{ background:T.canvasBg, borderRadius:18, padding:14, marginBottom:16, minHeight:220, display:'flex', alignItems:'center', justifyContent:'center', border:`1px solid ${T.border}` }}>
                 {hasItems
@@ -706,8 +581,8 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
               </div>
 
               <p style={{ fontSize:11, color:T.textFaint, textAlign:'center', lineHeight:1.7 }}>
-                {hasItems && `${queue.length} item${queue.length>1?'s':''} × ${layout.cols*layout.rows} tiles × ${copies} cop${copies>1?'ies':'y'} = ${queue.length*layout.cols*layout.rows*copies} labels`}<br />
-                PDF & Print → ALL items, each on its own page
+                {hasItems && `${queue.length} waybill${queue.length>1?'s':''} × ${layout.cols*layout.rows} tiles × ${copies} cop${copies>1?'ies':'y'} = ${queue.length*layout.cols*layout.rows*copies} labels`}<br />
+                PDF & Print → ALL waybills, each on its own page
               </p>
             </div>
           )}
