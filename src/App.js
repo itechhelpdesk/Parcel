@@ -344,16 +344,75 @@ export default function App() {
   }
 
   // ── Camera ────────────────────────────────────────────────────────────────
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1920 } },
-      });
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      setCameraOn(true);
-    } catch { ping("Camera permission denied"); }
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    ping("Camera hindi supported. Mag-upload nalang.");
+    return;
   }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        // HUWAG i-specify ang width — mas mabilis mag-open
+      },
+      audio: false,
+    });
+
+    streamRef.current = stream;
+    setCameraOn(true); // i-set MUNA bago i-assign srcObject
+
+    // Wait for next render para ma-mount ang video element
+    await new Promise(r => setTimeout(r, 100));
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.setAttribute("playsinline", ""); // iOS fix
+      videoRef.current.setAttribute("muted", "");
+      try {
+        await videoRef.current.play();
+      } catch (playErr) {
+        // Autoplay blocked — user interaction needed
+        // Just show the video, user can tap to play
+        console.warn("Autoplay blocked:", playErr);
+      }
+    }
+  } catch (err) {
+    setCameraOn(false);
+    if (err.name === "NotAllowedError") {
+      ping("I-allow ang camera sa browser settings.");
+    } else if (err.name === "NotFoundError") {
+      ping("Walang camera na nakita sa device.");
+    } else if (err.name === "NotReadableError") {
+      ping("Camera in-use na ng ibang app. I-close muna.");
+    } else if (err.name === "OverconstrainedError") {
+      // Retry without facingMode constraint
+      retryWithAnyCamera();
+    } else {
+      ping("Camera error: " + err.name);
+    }
+  }
+}
+
+// Fallback — walang facingMode constraint
+async function retryWithAnyCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false,
+    });
+    streamRef.current = stream;
+    setCameraOn(true);
+    await new Promise(r => setTimeout(r, 100));
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play().catch(() => {});
+    }
+  } catch (err) {
+    setCameraOn(false);
+    ping("Hindi ma-access ang camera: " + err.message);
+  }
+}
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -361,14 +420,19 @@ export default function App() {
     setCameraOn(false);
   }
 
-  function captureAndRead() {
-    const vid = videoRef.current;
-    const c = hiddenCanvas.current;
-    c.width = vid.videoWidth; c.height = vid.videoHeight;
-    c.getContext("2d").drawImage(vid, 0, 0);
-    readLabel(c);
-    stopCamera();
+ function captureAndRead() {
+  const vid = videoRef.current;
+  if (!vid || vid.readyState < 2) {
+    ping("Camera hindi pa ready. Sandali lang.");
+    return;
   }
+  const c = hiddenCanvas.current;
+  c.width = vid.videoWidth || 640;
+  c.height = vid.videoHeight || 480;
+  c.getContext("2d").drawImage(vid, 0, 0);
+  readLabel(c);
+  stopCamera();
+}
 
   function handleScanFile(e) {
     const file = e.target.files[0]; if (!file) return;
@@ -769,7 +833,19 @@ export default function App() {
           </div>
         </div>
       )}
-
+<video
+  ref={videoRef}
+  autoPlay
+  muted
+  playsInline
+  webkit-playsinline="true"
+  style={{
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block"
+  }}
+/>
       {/* Toast */}
       <div style={{ ...styles.toast, transform: `translateX(-50%) translateY(${toastShow ? 0 : 80}px)` }}>
         {toast}
