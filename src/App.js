@@ -1,7 +1,6 @@
 /* global BarcodeDetector */
 import { useState, useRef, useEffect } from 'react';
 
-// ─── Constants ──────────────────────────────────────────────────────────────
 const LAYOUTS = [
   { id: '1x1', label: '1×1', cols: 1, rows: 1 },
   { id: '2x1', label: '2×1', cols: 2, rows: 1 },
@@ -12,7 +11,6 @@ const SIZES = [50, 60, 80, 100];
 const PRINT_GAP = 2;
 const PRINT_PAD = 5;
 
-// ─── jsPDF loader ───────────────────────────────────────────────────────────
 async function loadJsPDF() {
   if (window.jspdf) return window.jspdf.jsPDF;
   await new Promise((res, rej) => {
@@ -24,12 +22,11 @@ async function loadJsPDF() {
   return window.jspdf.jsPDF;
 }
 
-// ─── Draw sheet — no crop, preserves aspect ratio ───────────────────────────
 function drawSheet(canvas, img, cols, rows) {
   const CELL_W = Math.max(img.width, 600);
   const CELL_H = Math.round(CELL_W * (img.height / img.width));
-  const GAP    = Math.round(CELL_W * 0.015);
-  const PAD    = Math.round(CELL_W * 0.025);
+  const GAP    = Math.round(CELL_W * 0.012);
+  const PAD    = Math.round(CELL_W * 0.02);
   const W = PAD*2 + cols*CELL_W + (cols-1)*GAP;
   const H = PAD*2 + rows*CELL_H + (rows-1)*GAP;
   canvas.width = W; canvas.height = H;
@@ -48,16 +45,15 @@ function renderToDataUrl(img, cols, rows) {
 
 function thumbUrl(img) {
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 80;
+  c.width = 56; c.height = 72;
   const cx = c.getContext('2d');
-  cx.fillStyle = '#fff'; cx.fillRect(0,0,64,80);
-  const s = Math.min(64/img.width, 80/img.height);
+  cx.fillStyle = '#fff'; cx.fillRect(0,0,56,72);
+  const s = Math.min(56/img.width, 72/img.height);
   const tw = img.width*s, th = img.height*s;
-  cx.drawImage(img, (64-tw)/2, (80-th)/2, tw, th);
+  cx.drawImage(img, (56-tw)/2, (72-th)/2, tw, th);
   return c.toDataURL();
 }
 
-// ─── Theme ──────────────────────────────────────────────────────────────────
 const THEME = {
   light: {
     bg:'#f5f4f0', surface:'#ffffff', border:'#e2dfd8',
@@ -72,7 +68,7 @@ const THEME = {
     shadow:'0 2px 16px rgba(0,0,0,0.08)',
     toggleBg:'#e2dfd8', toggleKnob:'#fff', toggleIcon:'🌙',
     uploadHoverBg:'#fff6f8', deleteBg:'rgba(254,44,85,0.08)',
-    scanActiveBg:'rgba(14,165,160,0.08)', scanActiveBorder:'#0ea5a0',
+    captureBtnBg:'#fe2c55',
   },
   dark: {
     bg:'#0d0d0d', surface:'#161616', border:'#2a2a2a',
@@ -87,47 +83,43 @@ const THEME = {
     shadow:'0 2px 20px rgba(0,0,0,0.4)',
     toggleBg:'#2a2a2a', toggleKnob:'#fe2c55', toggleIcon:'☀️',
     uploadHoverBg:'#1a0a0e', deleteBg:'rgba(254,44,85,0.12)',
-    scanActiveBg:'rgba(37,244,238,0.06)', scanActiveBorder:'#25f4ee44',
+    captureBtnBg:'#fe2c55',
   },
 };
 
-// ─── App ────────────────────────────────────────────────────────────────────
 export default function App() {
   const [dark, setDark]               = useState(false);
   const T = dark ? THEME.dark : THEME.light;
 
   const [tab, setTab]                 = useState('upload');
-  const [queue, setQueue]             = useState([]);   // Image objects
+  const [queue, setQueue]             = useState([]);
   const [selIdx, setSelIdx]           = useState(0);
   const [layout, setLayout]           = useState(LAYOUTS[2]);
   const [sizeMm, setSizeMm]           = useState(100);
   const [copies, setCopies]           = useState(1);
-  const [scanning, setScanning]       = useState(false);
+  const [cameraOn, setCameraOn]       = useState(false);
   const [uploadHover, setUploadHover] = useState(false);
   const [toast, setToast]             = useState('');
   const [toastShow, setToastShow]     = useState(false);
-  const [scanStatus, setScanStatus]   = useState(''); // live scan feedback
-  const [loadingUrl, setLoadingUrl]   = useState(''); // currently fetching
+  const [captureFlash, setCaptureFlash] = useState(false);
 
   const canvasRef  = useRef(null);
   const videoRef   = useRef(null);
   const streamRef  = useRef(null);
-  const scanRef    = useRef(null);
-  const scannedSet = useRef(new Set()); // dedupe QRs in one session
+  const hiddenCanvas = useRef(document.createElement('canvas'));
 
   useEffect(() => {
     if (!queue.length || !canvasRef.current) return;
     drawSheet(canvasRef.current, queue[selIdx], layout.cols, layout.rows);
   }, [queue, selIdx, layout, tab]);
 
-  useEffect(() => () => stopScan(), []); // eslint-disable-line
+  useEffect(() => () => stopCamera(), []); // eslint-disable-line
 
   function ping(msg) {
     setToast(msg); setToastShow(true);
-    setTimeout(() => setToastShow(false), 2800);
+    setTimeout(() => setToastShow(false), 2600);
   }
 
-  // ── Add image to queue ──
   function addImg(img) {
     setQueue(prev => {
       const next = [...prev, img];
@@ -136,115 +128,20 @@ export default function App() {
     });
   }
 
-  // ── Load image from URL (from QR) ──
-  function loadFromUrl(url) {
-    if (scannedSet.current.has(url)) return; // already scanned this one
-    scannedSet.current.add(url);
-    setLoadingUrl(url);
-    setScanStatus(`⬇ Loading waybill…`);
-
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      addImg(img);
-      setLoadingUrl('');
-      setScanStatus(`✓ Waybill loaded! Keep scanning for more…`);
-      ping(`✓ Waybill #${scannedSet.current.size} added`);
-    };
-    img.onerror = () => {
-      // crossOrigin failed — try without it (works for some CDNs)
-      const img2 = new Image();
-      img2.onload = () => {
-        addImg(img2);
-        setLoadingUrl('');
-        setScanStatus(`✓ Waybill loaded! Keep scanning for more…`);
-        ping(`✓ Waybill #${scannedSet.current.size} added`);
-      };
-      img2.onerror = () => {
-        setLoadingUrl('');
-        setScanStatus(`⚠ Could not load image — is it a direct image URL?`);
-        scannedSet.current.delete(url); // allow retry
-      };
-      img2.src = url;
-    };
-    img.src = url;
-  }
-
-  // ── Camera scan — stays ON, continuous ──
-  async function startScan() {
-    scannedSet.current = new Set();
-    setScanStatus('📷 Camera ready — point at QR code');
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-      streamRef.current = s;
-      videoRef.current.srcObject = s;
-      setScanning(true);
-      // Scan every 500ms
-      scanRef.current = setInterval(tryDecode, 500);
-    } catch {
-      ping('Camera permission denied');
-      setScanStatus('');
-    }
-  }
-
-  function stopScan() {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    clearInterval(scanRef.current);
-    setScanning(false);
-    setScanStatus('');
-  }
-
-  function tryDecode() {
-    const video = videoRef.current;
-    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-    const tmp = document.createElement('canvas');
-    tmp.width = video.videoWidth; tmp.height = video.videoHeight;
-    tmp.getContext('2d').drawImage(video, 0, 0);
-
-    if (typeof BarcodeDetector !== 'undefined') {
-      // Try both QR and all other 2D codes
-      new BarcodeDetector({ formats: ['qr_code', 'data_matrix', 'aztec'] })
-        .detect(tmp)
-        .then(codes => {
-          codes.forEach(code => {
-            const raw = code.rawValue?.trim();
-            if (!raw) return;
-            // Check if it's a URL
-            if (raw.startsWith('http://') || raw.startsWith('https://')) {
-              loadFromUrl(raw);
-            } else {
-              // Not a URL — show the raw text as status
-              if (!scannedSet.current.has(raw)) {
-                scannedSet.current.add(raw);
-                setScanStatus(`📄 QR contains text: ${raw.substring(0, 60)}`);
-                ping(`Scanned: ${raw.substring(0, 40)}`);
-              }
-            }
-          });
-        })
-        .catch(() => {});
-    } else {
-      setScanStatus('⚠ BarcodeDetector not supported — use Chrome/Edge on Android');
-    }
-  }
-
-  // ── File upload ──
+  // ── Upload from file ──
   function handleFiles(files) {
-    const loaded = [];
-    const total = files.length;
-    Array.from(files).forEach(file => {
+    const arr = Array.from(files);
+    let done = 0;
+    arr.forEach(file => {
       const reader = new FileReader();
       reader.onload = e => {
         const img = new Image();
         img.onload = () => {
-          loaded.push(img);
-          if (loaded.length === total) {
-            loaded.forEach(i => addImg(i));
+          addImg(img);
+          done++;
+          if (done === arr.length) {
             setTab('layout');
-            ping(`✓ ${total} waybill${total>1?'s':''} added`);
+            ping(`✓ ${arr.length} waybill${arr.length>1?'s':''} added`);
           }
         };
         img.src = e.target.result;
@@ -256,6 +153,53 @@ export default function App() {
   function handleDrop(e) {
     e.preventDefault(); setUploadHover(false);
     if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  }
+
+  // ── Camera ──
+  async function startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        }
+      });
+      streamRef.current = s;
+      videoRef.current.srcObject = s;
+      setCameraOn(true);
+    } catch {
+      ping('Camera permission denied');
+    }
+  }
+
+  function stopCamera() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setCameraOn(false);
+  }
+
+  // ── Capture photo from camera — this is the key function ──
+  function capturePhoto() {
+    const video = videoRef.current;
+    if (!video || !cameraOn) return;
+
+    // Flash effect
+    setCaptureFlash(true);
+    setTimeout(() => setCaptureFlash(false), 150);
+
+    // Capture at full video resolution
+    const c = hiddenCanvas.current;
+    c.width  = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+
+    const img = new Image();
+    img.onload = () => {
+      addImg(img);
+      ping(`✓ Captured! ${queue.length + 1} waybill${queue.length + 1 > 1 ? 's' : ''} — scan more or go to Print`);
+    };
+    img.src = c.toDataURL('image/png', 1.0);
   }
 
   function removeItem(i) {
@@ -271,15 +215,15 @@ export default function App() {
     if (!queue.length) return;
     const { cols, rows } = layout;
     const allPages = queue.flatMap(img => {
-      const dataUrl  = renderToDataUrl(img, cols, rows);
-      const labelW   = sizeMm;
-      const labelH   = Math.round(sizeMm * (img.height / img.width));
+      const dataUrl = renderToDataUrl(img, cols, rows);
+      const labelW  = sizeMm;
+      const labelH  = Math.round(sizeMm * (img.height / img.width));
       const pw = PRINT_PAD*2 + cols*labelW + (cols-1)*PRINT_GAP;
       const ph = PRINT_PAD*2 + rows*labelH + (rows-1)*PRINT_GAP;
       const cells = Array(cols*rows).fill(null)
         .map(() => `<div class="cell" style="width:${labelW}mm;height:${labelH}mm"><img src="${dataUrl}" alt=""></div>`)
         .join('');
-      const page = `<div class="pg" style="padding:${PRINT_PAD}mm;display:grid;grid-template-columns:repeat(${cols},${labelW}mm);grid-template-rows:repeat(${rows},${labelH}mm);gap:${PRINT_GAP}mm;page-break-after:always;">${cells}</div>`;
+      const page = `<div style="padding:${PRINT_PAD}mm;display:grid;grid-template-columns:repeat(${cols},${labelW}mm);grid-template-rows:repeat(${rows},${labelH}mm);gap:${PRINT_GAP}mm;page-break-after:always;">${cells}</div>`;
       return Array(copies).fill(page);
     });
 
@@ -296,13 +240,13 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
 <script>window.onload=function(){window.print();setTimeout(function(){window.close();},1000);}<\/script>
 </body></html>`);
     win.document.close();
-    ping(`🖨️ Printing ${queue.length} waybill${queue.length>1?'s':''} × ${cols*rows} tiles × ${copies} cop${copies>1?'ies':'y'}`);
+    ping(`🖨️ Printing ${queue.length} waybill${queue.length>1?'s':''} × ${cols*rows} per sheet`);
   }
 
   // ── PDF ALL ──
   async function doPDF() {
     if (!queue.length) return;
-    ping(`📄 Building PDF…`);
+    ping('📄 Building PDF…');
     try {
       const JsPDF = await loadJsPDF();
       const { cols, rows } = layout;
@@ -325,8 +269,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
         }
       }
       doc.save('waybills.pdf');
-      const total = queue.length * copies;
-      ping(`✓ waybills.pdf — ${total} page${total>1?'s':''}`);
+      ping(`✓ waybills.pdf — ${queue.length * copies} pages`);
     } catch(e) { ping('PDF error: '+e.message); }
   }
 
@@ -343,9 +286,9 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
           <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:28 }}>
             <div>
               <div style={{ fontFamily:"'Syne',sans-serif", fontSize:28, fontWeight:800, letterSpacing:-1, background:'linear-gradient(135deg,#fe2c55,#ff8f3f)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>StickerBooth</div>
-              <div style={{ fontSize:12, color:T.textMuted, marginTop:3 }}>scan QR or upload → tile → bulk print / PDF</div>
+              <div style={{ fontSize:12, color:T.textMuted, marginTop:3 }}>photo or upload → tile → bulk print / PDF</div>
             </div>
-            <button onClick={() => setDark(d=>!d)} title="Toggle theme"
+            <button onClick={() => setDark(d=>!d)}
               style={{ width:46, height:26, borderRadius:13, background:T.toggleBg, border:'none', cursor:'pointer', position:'relative', flexShrink:0, marginTop:4, transition:'background 0.3s' }}>
               <div style={{ position:'absolute', top:3, left:dark?22:3, width:20, height:20, borderRadius:'50%', background:T.toggleKnob, transition:'left 0.25s', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11 }}>
                 {T.toggleIcon}
@@ -355,11 +298,10 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
 
           {/* Tabs */}
           <div style={{ display:'flex', gap:6, background:T.surface, padding:6, borderRadius:16, marginBottom:22, boxShadow:T.shadow }}>
-            {[['upload','📁 Upload'],['scan','📷 Scan QR'],['layout','🖨️ Print']].map(([id,label]) => (
-              <button key={id} onClick={() => { setTab(id); if(id!=='scan') stopScan(); }}
+            {[['upload','📁 Upload'],['camera','📷 Camera'],['layout','🖨️ Print']].map(([id,label]) => (
+              <button key={id} onClick={() => { setTab(id); if(id!=='camera') stopCamera(); }}
                 style={{ ...base, flex:1, padding:'10px 6px', borderRadius:10, fontSize:13, fontWeight:500, background:tab===id?T.tabActiveBg:'transparent', color:tab===id?T.tabActiveTxt:T.textMuted }}>
                 {label}
-                {id==='scan' && scanning && <span style={{ display:'inline-block', width:6, height:6, borderRadius:'50%', background:'#fe2c55', marginLeft:5, verticalAlign:'middle' }} />}
               </button>
             ))}
           </div>
@@ -376,8 +318,8 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
               >
                 <input type="file" accept="image/*" multiple style={{ position:'absolute', inset:0, opacity:0, cursor:'pointer', width:'100%', height:'100%' }} onChange={e => handleFiles(e.target.files)} />
                 <span style={{ fontSize:40, display:'block', marginBottom:12 }}>🖼️</span>
-                <p style={{ fontSize:14, color:T.textMuted }}><span style={{ color:T.accent, fontWeight:600 }}>Tap to upload</span> or drag waybill images here</p>
-                <p style={{ fontSize:12, color:T.textFaint, marginTop:6 }}>Multiple waybills OK — each on its own page</p>
+                <p style={{ fontSize:14, color:T.textMuted }}><span style={{ color:T.accent, fontWeight:600 }}>Tap to upload</span> or drag waybill images</p>
+                <p style={{ fontSize:12, color:T.textFaint, marginTop:6 }}>JPG · PNG · Screenshot · Multiple OK</p>
               </label>
 
               {hasItems && (
@@ -391,10 +333,10 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
                     {queue.map((img, i) => (
                       <div key={i} style={{ position:'relative', flexShrink:0 }}>
                         <img src={thumbUrl(img)} alt="" onClick={() => { setSelIdx(i); setTab('layout'); }}
-                          style={{ width:64, height:80, objectFit:'contain', background:'#fff', borderRadius:10, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }} />
+                          style={{ width:56, height:72, objectFit:'contain', background:'#fff', borderRadius:10, display:'block', cursor:'pointer', border:`3px solid ${i===selIdx?T.accent:T.border}` }} />
                         <button onClick={() => removeItem(i)}
                           style={{ ...base, position:'absolute', top:-6, right:-6, width:20, height:20, borderRadius:'50%', background:T.accent, color:'#fff', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
-                        <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:3 }}>#{i+1}</div>
+                        <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:2 }}>#{i+1}</div>
                       </div>
                     ))}
                   </div>
@@ -403,82 +345,90 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
             </div>
           )}
 
-          {/* ══ Scan QR ══ */}
-          {tab === 'scan' && (
+          {/* ══ Camera — point and shoot ══ */}
+          {tab === 'camera' && (
             <div>
-              {/* Instructions */}
-              <div style={{ background:T.scanActiveBg, border:`1px solid ${T.scanActiveBorder}`, borderRadius:12, padding:'10px 14px', marginBottom:14, fontSize:12, color:T.cyan, lineHeight:1.7 }}>
-                📌 I-scan yung QR code ng SPX / Shopee / Lazada waybill mo<br />
-                🔄 Camera nananatili ON — pwede ka mag-scan ng marami nang sunod-sunod<br />
-                ✅ Bawat scan auto-aadd sa print queue
+              {/* Tip */}
+              <div style={{ background:`${T.cyan}15`, border:`1px solid ${T.cyan}44`, borderRadius:12, padding:'10px 14px', marginBottom:14, fontSize:12, color:T.cyan, lineHeight:1.7 }}>
+                📌 I-point ang camera sa waybill mo<br />
+                📸 Tap <strong>Capture</strong> — exact na photo ang ma-save<br />
+                🔄 Pwede ka mag-capture ng marami nang sunod-sunod
               </div>
 
-              {/* Video */}
-              <div style={{ position:'relative', background:'#000', borderRadius:18, overflow:'hidden', aspectRatio:'4/3' }}>
+              {/* Camera viewfinder */}
+              <div style={{ position:'relative', background:'#000', borderRadius:18, overflow:'hidden', aspectRatio:'3/4' }}>
                 <video ref={videoRef} autoPlay muted playsInline style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
-                {/* Viewfinder */}
-                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-                  <div style={{ position:'relative', width:200, height:200 }}>
-                    <div style={{ position:'absolute', inset:0, boxShadow:'0 0 0 9999px rgba(0,0,0,0.5)' }} />
-                    {/* Corner markers */}
+
+                {/* Flash overlay */}
+                {captureFlash && (
+                  <div style={{ position:'absolute', inset:0, background:'rgba(255,255,255,0.8)', pointerEvents:'none' }} />
+                )}
+
+                {/* Corner guide */}
+                {cameraOn && (
+                  <div style={{ position:'absolute', inset:0, pointerEvents:'none' }}>
+                    {/* Guide frame */}
+                    <div style={{ position:'absolute', top:'5%', left:'5%', right:'5%', bottom:'5%', border:`2px solid rgba(255,255,255,0.3)`, borderRadius:8 }} />
                     {[
-                      { top:0, left:0, borderTop:`3px solid ${T.cyan}`, borderLeft:`3px solid ${T.cyan}` },
-                      { top:0, right:0, borderTop:`3px solid ${T.cyan}`, borderRight:`3px solid ${T.cyan}` },
-                      { bottom:0, left:0, borderBottom:`3px solid ${T.cyan}`, borderLeft:`3px solid ${T.cyan}` },
-                      { bottom:0, right:0, borderBottom:`3px solid ${T.cyan}`, borderRight:`3px solid ${T.cyan}` },
-                    ].map((s, i) => (
-                      <div key={i} style={{ position:'absolute', width:24, height:24, ...s }} />
-                    ))}
-                    {scanning && <div style={{ position:'absolute', inset:0, border:`1px solid ${T.cyan}44`, animation:'none' }} />}
-                  </div>
-                </div>
-                {/* Loading overlay */}
-                {loadingUrl && (
-                  <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                    <div style={{ color:'#fff', fontSize:14, textAlign:'center', padding:20 }}>
-                      <div style={{ fontSize:28, marginBottom:8 }}>⬇️</div>
-                      Loading waybill image…
+                      { top:'5%', left:'5%', borderTop:'3px solid #fff', borderLeft:'3px solid #fff' },
+                      { top:'5%', right:'5%', borderTop:'3px solid #fff', borderRight:'3px solid #fff' },
+                      { bottom:'5%', left:'5%', borderBottom:'3px solid #fff', borderLeft:'3px solid #fff' },
+                      { bottom:'5%', right:'5%', borderBottom:'3px solid #fff', borderRight:'3px solid #fff' },
+                    ].map((s,i) => <div key={i} style={{ position:'absolute', width:28, height:28, ...s }} />)}
+                    <div style={{ position:'absolute', bottom:16, left:0, right:0, textAlign:'center', color:'rgba(255,255,255,0.7)', fontSize:12 }}>
+                      Ilagay ang buong waybill sa loob ng frame
                     </div>
+                  </div>
+                )}
+
+                {/* Not started state */}
+                {!cameraOn && (
+                  <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:12 }}>
+                    <span style={{ fontSize:48 }}>📷</span>
+                    <p style={{ color:'#888', fontSize:14 }}>I-tap ang Start Camera</p>
                   </div>
                 )}
               </div>
 
-              {/* Status bar */}
-              {scanStatus && (
-                <div style={{ marginTop:10, padding:'10px 14px', background:T.surface, borderRadius:10, border:`1px solid ${T.border}`, fontSize:12, color:T.textMuted }}>
-                  {scanStatus}
-                </div>
-              )}
+              {/* Controls */}
+              <div style={{ display:'flex', gap:10, marginTop:12 }}>
+                <button onClick={() => cameraOn ? stopCamera() : startCamera()}
+                  style={{ ...base, flex:1, padding:14, borderRadius:12, fontFamily:"'Syne',sans-serif", fontSize:14, fontWeight:700, background:cameraOn?'#333':T.cyan, color:'#fff' }}>
+                  {cameraOn ? '⏹ Stop' : '▶ Start Camera'}
+                </button>
 
-              {/* Start/Stop button */}
-              <button onClick={() => scanning ? stopScan() : startScan()}
-                style={{ ...base, width:'100%', padding:14, borderRadius:12, marginTop:10, fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, background:scanning?T.accent:T.cyan, color:'#fff' }}>
-                {scanning ? '⏹ Stop Scanning' : '▶ Start Scanning'}
-              </button>
+                {/* Big capture button */}
+                <button
+                  onClick={capturePhoto}
+                  disabled={!cameraOn}
+                  style={{ ...base, flex:2, padding:14, borderRadius:12, fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:800, background:!cameraOn?T.border:T.btnPrintBg, color:'#fff', letterSpacing:0.5, opacity:!cameraOn?0.4:1, cursor:!cameraOn?'default':'pointer' }}>
+                  📸 Capture Waybill
+                </button>
+              </div>
 
-              {/* Queue status */}
+              {/* Queue preview */}
               {hasItems && (
-                <div style={{ marginTop:12, padding:'10px 14px', background:T.btnPdfBg, border:`1px solid ${T.btnPdfBorder}`, borderRadius:12, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <span style={{ fontSize:13, color:T.btnPdfColor, fontWeight:600 }}>
-                    📦 {queue.length} waybill{queue.length>1?'s':''} ready
-                  </span>
-                  <button onClick={() => { stopScan(); setTab('layout'); }}
-                    style={{ ...base, fontSize:12, fontWeight:700, color:'#fff', background:T.btnPrintBg, padding:'7px 14px', borderRadius:8, fontFamily:"'Syne',sans-serif" }}>
-                    Print All →
-                  </button>
-                </div>
-              )}
-
-              {/* Scanned thumbnails */}
-              {hasItems && (
-                <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:4, marginTop:10 }}>
-                  {queue.map((img, i) => (
-                    <div key={i} style={{ flexShrink:0, textAlign:'center' }}>
-                      <img src={thumbUrl(img)} alt=""
-                        style={{ width:48, height:60, objectFit:'contain', background:'#fff', borderRadius:8, display:'block', border:`2px solid ${T.border}` }} />
-                      <div style={{ fontSize:9, color:T.textMuted, marginTop:2 }}>#{i+1}</div>
-                    </div>
-                  ))}
+                <div style={{ marginTop:14 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                    <span style={{ fontSize:12, color:T.textMuted, fontWeight:500 }}>
+                      📦 {queue.length} waybill{queue.length>1?'s':''} captured
+                    </span>
+                    <button onClick={() => { stopCamera(); setTab('layout'); }}
+                      style={{ ...base, fontSize:12, fontWeight:700, color:'#fff', background:T.btnPrintBg, padding:'7px 14px', borderRadius:8, fontFamily:"'Syne',sans-serif" }}>
+                      Print All →
+                    </button>
+                  </div>
+                  <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
+                    {queue.map((img, i) => (
+                      <div key={i} style={{ position:'relative', flexShrink:0 }}>
+                        <img src={thumbUrl(img)} alt=""
+                          style={{ width:56, height:72, objectFit:'contain', background:'#fff', borderRadius:8, display:'block', border:`2px solid ${T.border}` }} />
+                        <button onClick={() => removeItem(i)}
+                          style={{ ...base, position:'absolute', top:-5, right:-5, width:18, height:18, borderRadius:'50%', background:T.accent, color:'#fff', fontSize:11, display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
+                        <div style={{ textAlign:'center', fontSize:9, color:T.textMuted, marginTop:2 }}>#{i+1}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -558,7 +508,7 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
                       <canvas ref={canvasRef} style={{ display:'none' }} />
                       <div style={{ textAlign:'center', color:T.textFaint, fontSize:14 }}>
                         <span style={{ fontSize:36, display:'block', marginBottom:8 }}>📷</span>
-                        Upload or scan a waybill first
+                        Upload or capture a waybill first
                       </div>
                     </>
                   )
@@ -590,7 +540,6 @@ body{margin:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjus
         </div>
       </div>
 
-      {/* Toast */}
       <div style={{ position:'fixed', bottom:28, left:'50%', transform:`translateX(-50%) translateY(${toastShow?0:80}px)`, background:T.toastBg, color:T.toastTxt, padding:'11px 22px', borderRadius:100, fontSize:13, fontWeight:500, transition:'transform 0.3s ease', whiteSpace:'nowrap', zIndex:9999, pointerEvents:'none', border:`1px solid ${T.border}` }}>
         {toast}
       </div>
